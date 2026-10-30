@@ -1,0 +1,45 @@
+#!/bin/bash
+set -euo pipefail
+IFACE=wg-stash
+POOL=10.88.0.0/24
+OUT="$(ip -o -4 route show default | awk '{print $5; exit}')"
+[[ -n "$OUT" ]] || { echo 'No default IPv4 interface' >&2; exit 1; }
+
+remove_rules() {
+    while iptables -w -C FORWARD -i "$IFACE" -j STASH_FORWARD 2>/dev/null; do
+        iptables -w -D FORWARD -i "$IFACE" -j STASH_FORWARD
+    done
+    while iptables -w -C FORWARD -o "$IFACE" -d "$POOL" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; do
+        iptables -w -D FORWARD -o "$IFACE" -d "$POOL" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+    done
+    while iptables -w -C INPUT -i "$IFACE" -j REJECT 2>/dev/null; do
+        iptables -w -D INPUT -i "$IFACE" -j REJECT
+    done
+    while iptables -w -t nat -C POSTROUTING -s "$POOL" -o "$OUT" -j MASQUERADE 2>/dev/null; do
+        iptables -w -t nat -D POSTROUTING -s "$POOL" -o "$OUT" -j MASQUERADE
+    done
+    iptables -w -F STASH_FORWARD 2>/dev/null || true
+    iptables -w -X STASH_FORWARD 2>/dev/null || true
+}
+
+case "${1:-}" in
+    up)
+        # Build the chain while it is detached, then attach it. Idempotent.
+        remove_rules
+        iptables -w -N STASH_FORWARD
+        for protocol in tcp udp; do
+            iptables -w -A STASH_FORWARD -p "$protocol" -m multiport --dports 53,853 -j REJECT
+        done
+        for network in 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4; do
+            iptables -w -A STASH_FORWARD -d "$network" -j REJECT
+        done
+        iptables -w -A STASH_FORWARD -s "$POOL" -o "$OUT" -j ACCEPT
+        iptables -w -A STASH_FORWARD -j REJECT
+        iptables -w -I INPUT 1 -i "$IFACE" -j REJECT
+        iptables -w -I FORWARD 1 -o "$IFACE" -d "$POOL" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+        iptables -w -I FORWARD 1 -i "$IFACE" -j STASH_FORWARD
+        iptables -w -t nat -A POSTROUTING -s "$POOL" -o "$OUT" -j MASQUERADE
+        ;;
+    down) remove_rules ;;
+    *) echo 'Usage: firewall up|down' >&2; exit 1 ;;
+esac

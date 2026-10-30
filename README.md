@@ -1,83 +1,140 @@
 # Stash Split Tunnel
 
-**Status: preparation stage. The existing installer is still the original full-tunnel WireGuard baseline. Stash URL generation and split routing are not implemented yet.**
+**Experimental test release. The installer and subscription service are implemented. Live VPS installation, certificate issuance, Stash parsing, Apple TV playback and strict device-DNS behavior have not been verified on real devices.**
 
-A project for Stash on Apple TV, iPhone and iPad, using a subscription URL imported once and centrally maintained domain rules. The original [wireguard-server](https://github.com/waqaarhussain/wireguard-server) repository remains separate.
+Import a private URL into Stash once. Matching YouTube domains use that VPS's WireGuard connection; unmatched connections use `DIRECT` through the device's normal network. Stash is the client app; WireGuard remains the server transport. The original [wireguard-server](https://github.com/waqaarhussain/wireguard-server) repository is separate and unchanged.
 
-## Intended behavior
+## Install on a fresh VPS
 
-- Send YouTube traffic through the selected VPS, using that VPS's own internet connection.
-- Send unmatched traffic directly through the device's normal ISP connection.
-- Detect each VPS's endpoint during setup rather than hardcoding a public IP into the installer.
-- Provide a private Stash subscription URL for each client, rather than requiring manual configuration-file editing.
-- Keep domain rules on the VPS and allow Stash to fetch updates periodically. The proposed server refresh schedule is at the hour and half hour; client fetching is a separate interval and is not guaranteed to occur at those exact clock times.
-- Use the DNS resolver already supplied by the device/network, without adding a public resolver or fallback. This is a required acceptance criterion, not a validated capability of the current implementation.
+Requires Debian/Ubuntu with APT, systemd and a public IPv4 address. Inbound TCP 80/443 and UDP 51820 must be reachable, including in any provider firewall. Use a dedicated fresh server; the installer refuses an existing `wg0` or Caddy installation.
 
-Stash replaces the standard WireGuard client app in this design. WireGuard may still serve as the transport between Stash and the VPS; changing client apps does not itself require replacing the server protocol.
-
-## DNS acceptance requirement
-
-Stash documents `system` as an upstream DNS choice, but also has its own DNS handling and protocol-specific resolution. We have not verified that its WireGuard and proxied UDP paths can satisfy strict device-DNS-only operation. Do not describe the project as meeting that requirement until an Apple TV test confirms it.
-
-## Installation status
-
-Do not reset a VPS for a Stash split-tunnel test yet. This command currently installs only the preserved full-tunnel baseline; it does not generate Stash subscription URLs:
+Run as root. `curl` must already be installed:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/waqaarhussain/stash-split-tunnel/main/install.sh -o /tmp/stash-split-tunnel-install.sh && bash /tmp/stash-split-tunnel-install.sh
 ```
 
-For baseline installation only: run in a root Bash session on a fresh Debian/Ubuntu-style VPS with APT, systemd and `curl` available.
+The installer detects this VPS's public IPv4, configures `wg-stash` on `10.88.0.1/24`, installs Caddy from its official stable package repository, and requests a publicly trusted short-lived Let's Encrypt IP certificate. No purchased domain name is required. The detected IP is written into this server's state and client subscriptions, rather than hardcoded in the installer.
 
-Rerunning the existing installer regenerates the server keys and overwrites `/etc/wireguard/wg0.conf`, including existing peer entries. It is not an update command. The installer retains the original command error handling and is not transactional.
+Certificate issuance and automatic renewals require the server to stay reachable. Certificate failures are reported; TLS verification is never disabled. If an installation fails midway, rerun the installer to resume using its incomplete-install marker. Existing initialized keys and clients are preserved. Completed installations refuse to run again; this is not an update command.
 
-## Current baseline reference
+After the installer reports HTTPS ready:
 
-The sections below describe the preserved installer, not the planned Stash interface.
+```bash
+stash new
+```
+
+Enter a simple client name, such as `AppleTV`. The helper prints its private HTTPS subscription URL and a `stash://install-config` import link. In Stash, use **Configuration > Download from URL**, select the imported profile, and use **Rule** mode. You do not need to edit or transfer a local YAML file. The URL downloads a Stash configuration; it is not a VPN provider subscription or a paid service.
+
+Use one client per device. URLs contain bearer tokens and the configuration includes that client's private key. Anyone who obtains a URL can use that client's access. Keep URLs out of public posts, screenshots and GitHub. The subscription backend listens only on loopback behind HTTPS, has no administration endpoints, and does not log request paths. Removing a client revokes both its server peer and URL; a previously downloaded profile then cannot authenticate to the server.
+
+## Device DNS is a required test, not a verified promise
+
+The generated profile uses `system` for its main, bootstrap and proxy-endpoint DNS choices, with no public upstream or fallback. Queries use direct routing, and the profile requests real answers with `fake-ip-filter: ['*']`. Stash still handles DNS and maintains a cache; this is not bypassing Stash's DNS engine.
+
+Stash's documentation also describes DNS resolution inside proxy protocols, including for UDP. To avoid silently falling back to a public resolver, the WireGuard node is deliberately pointed at the unavailable tunnel-local DNS address `10.88.0.1`. There is no DNS listener there. The VPS rejects traffic from the tunnel to the server itself, and forwarded DNS on TCP/UDP ports 53 and 853. This blocks those remote DNS paths rather than providing a replacement resolver.
+
+**This guard may prevent YouTube from working if Stash requires remote resolution. If that happens, this release does not satisfy the requested combination. Do not disable the guard or switch DNS providers and call it fixed.** Firewall counters cannot prove that an app never uses its own DNS-over-HTTPS, which is indistinguishable from other HTTPS here. Application-specific DNS and OS-managed encrypted DNS also require device testing.
+
+The test profile is IPv4-only in Stash. It does not configure IPv6 forwarding or NAT on the VPS. This setting affects Stash's IPv6 resolution/connection behavior; it does not change which upstream resolver `system` selects. IPv6 parity remains future work.
+
+## Rules and refresh schedule
+
+The server fetches the community-maintained [blackmatrix7 YouTube domain list](https://github.com/blackmatrix7/ios_rule_script/blob/master/rule/Clash/YouTube/YouTube.yaml). It accepts validated `DOMAIN`, `DOMAIN-SUFFIX` and `DOMAIN-KEYWORD` entries only. Shared IP ranges are excluded. A small bundled YouTube domain seed is retained if the first download fails. Later download or validation failures preserve the last good list.
+
+This refreshes a maintained domain catalog, not an automatically discovered exhaustive list of YouTube hosts. Some catalog domains are shared with other Google services; matching traffic to those domains also uses the VPS. Unknown hosts or connections for which Stash has no matching domain can go direct. Complete YouTube coverage requires inspecting actual Apple TV requests and maintaining the list.
+
+| Operation | Timing |
+| --- | --- |
+| VPS checks the upstream domain list | On the hour and half hour, in the VPS's timezone |
+| Stash fetches the server's rule set | Every `1800` seconds while its engine runs, subject to app/OS scheduling |
+| Server health check | Every five minutes |
+| Client config changes other than rule contents | Refresh the remote profile in Stash |
+
+Server and client refreshes are separate, so an upstream change can wait for both intervals. A fresh rule set applies to new connections; existing streams and DNS caches may persist. No peer restarts are used to apply rule updates.
+
+Add extra domain suffixes, one per line, to:
+
+```text
+/var/lib/stash-split-tunnel/domains.txt
+```
+
+These are merged into the authenticated rule URL when Stash fetches it. To use a different service on another VPS:
+
+```bash
+stash service netflix
+```
+
+To return to YouTube:
+
+```bash
+stash service youtube
+```
+
+For only your custom domain list, first populate `domains.txt`, then run:
+
+```bash
+stash service custom
+```
+
+The service selection changes the domain catalog, not the exit server. Each VPS always supplies its own exit connection. A failed service switch restores the previous source and rules. Existing client URLs remain valid. Custom entries are additive unless custom-only mode is selected. Changing domains alone does not guarantee another streaming service will accept a datacenter IP or work correctly with local DNS.
 
 ## Helpers
 
+Run as root:
+
 | Command | Action |
 | --- | --- |
-| `new` | Ask for a client name, allocate the first unused IPv4 address, generate its config and PNG QR code, and add its server peer. |
-| `remove` | List clients, ask for a selection and explicit `YES`, back up the server config, remove the peer, and delete the selected client's folder. |
-| `wg show` | Display WireGuard's current status. |
+| `stash new` | Ask for a name and create a client, keys and private URL |
+| `stash list` | List client names |
+| `stash url` | Select a client and display its existing URLs |
+| `stash remove` | Select a client; type `YES` to revoke its peer and URL |
+| `stash rules` | Refresh the upstream domain list immediately |
+| `stash service youtube` | Select YouTube rules |
+| `stash service netflix` | Select Netflix rules |
+| `stash service custom` | Use only the custom domain list |
+| `stash status` | Show services, rule age, handshake age and DNS rejection counters |
 
-Run helpers as root. Client files are stored at:
+`stash new AppleTV` and `stash url AppleTV` also accept names directly. Client operations are serialized to avoid address allocation races, and peer changes use `wg syncconf` to avoid restarting unrelated sessions. Failed peer updates attempt to restore the previous server configuration.
 
-```text
-/Wireguard/client/CLIENT_NAME/CLIENT_NAME.conf
-/Wireguard/client/CLIENT_NAME/CLIENT_NAME.png
+The health timer restarts a missing WireGuard interface or starts an inactive subscription/Caddy service. It does not interpret idle handshakes as a failure or periodically reboot the VPN. WireGuard handles key renegotiation itself. Restarting a VPS cannot flush caches on an Apple TV.
+
+## First device acceptance test
+
+1. Run `stash status` and note DNS rejection counters.
+2. Import the private URL into Stash on Apple TV. Select Rule mode and start it.
+3. Fully close and reopen YouTube. Confirm thumbnails, sign-in and video playback work. Check Stash's connection log for matching domains using `This VPS`; check WireGuard byte counters with `wg show wg-stash`.
+4. Check Stash's DNS inspection and, where available, query logs on your existing resolver. Confirm it uses the device/network resolver. Compare `stash status` rejection counters during playback. Increasing DNS rejections or failed resolution means the remote-DNS path is incompatible, not that the device needs a different DNS provider.
+5. Test an unrelated app/site and confirm its connections show `DIRECT`. An iPhone using its own client URL can also compare normal and Stash-enabled public IP and DNS results in a browser. That does not replace the Apple TV check.
+6. Add a harmless test suffix to `domains.txt`, refresh the rule provider and confirm it appears without reimporting the profile.
+7. Test removal with a disposable client. The URL should return 404 and its saved credentials should stop working.
+
+Do not call the strict DNS requirement or all-YouTube routing confirmed until these device checks pass. No Apple TV or user VPS is accessible from this development environment.
+
+## Diagnostics and recovery
+
+```bash
+stash status
+systemctl list-timers 'stash-*'
+journalctl -u caddy -n 50 --no-pager
+journalctl -u stash-subscriptions -n 50 --no-pager
+journalctl -u stash-rules -n 50 --no-pager
+wg show wg-stash
 ```
 
-The QR code is saved as a PNG only. It is not printed in the terminal. Configs and QR images contain private client keys; keep them private and do not commit generated files to GitHub.
+Keep Caddy's data directory intact across reboots so it can reuse and renew certificates. Keep `/var/lib/stash-split-tunnel` and `/etc/wireguard/wg-stash.conf` private and backed up. Moving to a different public IP requires deliberate endpoint, certificate and subscription migration; IP detection at install time does not make old IP-based URLs follow a new server automatically.
 
-## Preserved configuration
+## Validation performed
 
-| Setting | Value |
-| --- | --- |
-| Interface | `wg0` |
-| Server VPN address | `10.8.0.1/24` |
-| Client address pool | `10.8.0.2` through `10.8.0.254` |
-| Listen port | `51820/udp` |
-| Endpoint | Public IPv4 detected using `https://api.ipify.org` when `new` runs |
-| Client AllowedIPs | `0.0.0.0/0, ::/0` |
-| Client DNS field | Omitted |
-| Persistent keepalive | `25` seconds |
-| Firewall | IPv4 iptables NAT and forwarding rules; attempts a UFW port allowance if UFW is available |
+`python3 -m unittest -v test_manager` checks address/key isolation, invalid names, pool exhaustion, failed peer-update rollback, generated system-DNS/direct-default configuration, malicious/invalid rule rejection, last-good rules, service-switch rollback, custom service switching, authenticated HTTP downloads, URL revocation, and firewall reapply/cleanup through simulated iptables. `bash -n` checks the installer and firewall. The systemd calendar expression is checked using `systemd-analyze calendar`.
 
-Omitting the DNS field leaves DNS configuration to the client environment. It does not guarantee that DNS traffic bypasses a full tunnel.
+These are local automated checks. Real kernel WireGuard/firewall behavior, a complete fresh-VPS install, Caddy ACME issuance and Stash/Apple TV behavior remain untested. The installer validates Caddy's configuration and checks HTTPS trust on the target VPS before reporting the URLs ready for a test.
 
-## Known limitations of the original commands
+## References
 
-- IPv6 forwarding is enabled and client configs include `::/0`, but the supplied setup does not assign IPv6 VPN addresses or provide IPv6 forwarding/firewall/NAT configuration. Working IPv6 internet access through this tunnel has not been established.
-- `remove` requires `python3`, which the original APT command does not explicitly install.
-- The original name validation permits characters that can break the Python snippet in `remove`, including quotes. Use simple client names containing letters, numbers, hyphens and underscores.
-- Client creation has no allocation lock for simultaneous runs.
-- Provider-level firewalls and existing host firewall policies are not managed by these commands, apart from the shown iptables rules and UFW allowance.
-
-These points describe the unchanged baseline. Stash subscription hosting, domain-rule updates and strict DNS behavior still require implementation and validation.
-
-## Validation
-
-The installer and extracted helper scripts pass `bash -n`. The Python removal snippet compiles with a representative simple client name. Installation and live VPN traffic have not been tested on a VPS as part of packaging.
+- [Stash remote URL import](https://stash.wiki/en/get-started)
+- [Stash DNS behavior](https://stash.wiki/en/features/dns-server)
+- [Stash WireGuard and protocol DNS behavior](https://stash.wiki/en/proxy-protocols/proxy-types)
+- [Stash remotely updated rule sets](https://stash.wiki/en/rules/rule-set)
+- [Official Caddy packages](https://caddyserver.com/docs/install)
+- [Let's Encrypt IP certificates](https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability)

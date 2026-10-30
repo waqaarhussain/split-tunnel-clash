@@ -1,226 +1,220 @@
 #!/bin/bash
-
-apt update
-apt install -y wireguard iptables qrencode curl
-
-cat > /etc/sysctl.d/99-wireguard.conf << 'EOF'
-net.ipv4.ip_forward=1
-net.ipv6.conf.all.forwarding=1
-EOF
-sysctl --system
-
-mkdir -p /Wireguard/server /Wireguard/client
-chmod 700 /Wireguard
-
-umask 077
-wg genkey | tee /Wireguard/server/server_privatekey | wg pubkey > /Wireguard/server/server_publickey
-
-SERVER_IFACE="$(ip -o -4 route show to default | awk '{print $5; exit}')"
-
-cat > /etc/wireguard/wg0.conf << EOF
-[Interface]
-Address = 10.8.0.1/24
-ListenPort = 51820
-PrivateKey = $(cat /Wireguard/server/server_privatekey)
-
-# NAT for full-tunnel clients
-PostUp   = iptables -t nat -A POSTROUTING -o ${SERVER_IFACE} -j MASQUERADE; iptables -A FORWARD -i wg0 -j ACCEPT; iptables -A FORWARD -o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-PostDown = iptables -t nat -D POSTROUTING -o ${SERVER_IFACE} -j MASQUERADE; iptables -D FORWARD -i wg0 -j ACCEPT; iptables -D FORWARD -o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-EOF
-
-chmod 600 /etc/wireguard/wg0.conf
-
-ufw allow 51820/udp 2>/dev/null || true
-
-systemctl enable --now wg-quick@wg0
-wg show
-
-cat > /usr/local/bin/new << 'EOF'
-#!/bin/bash
 set -euo pipefail
-
-BASE="/Wireguard"
-CLIENTS="$BASE/client"
-SERVER_CONF="/etc/wireguard/wg0.conf"
-SERVER_PUB="$(cat "$BASE/server/server_publickey")"
-SERVER_IP="$(curl -4 -s https://api.ipify.org || true)"
-SERVER_PORT="51820"
-
-mkdir -p "$CLIENTS"
-
-read -r -p "Client name: " NAME
-NAME="$(echo "$NAME" | sed -e 's/^[[:space:]]\+//' -e 's/[[:space:]]\+$//')"
-if [ -z "$NAME" ]; then
-  echo "Client name cannot be empty."
-  exit 1
-fi
-
-# block only the truly dangerous stuff
-if echo "$NAME" | grep -qE '(^\.\.$|^\.$|/|\\)'; then
-  echo "Invalid name: cannot contain / or \\ or be . or .."
-  exit 1
-fi
-
-DIR="$CLIENTS/$NAME"
-if [ -d "$DIR" ]; then
-  echo "Client already exists: $DIR"
-  exit 1
-fi
-mkdir -p "$DIR/keys"
-chmod 700 "$DIR" "$DIR/keys"
-
-# Allocate first free IP in 10.8.0.2-254 based on server AllowedIPs entries
-USED="$(grep -Eo 'AllowedIPs[[:space:]]*=[[:space:]]*10\.8\.0\.[0-9]+/32' "$SERVER_CONF" \
-  | grep -Eo '10\.8\.0\.[0-9]+' \
-  | awk -F. '{print $4}' | sort -n | uniq || true)"
-
-NEXT=""
-for o in $(seq 2 254); do
-  if ! echo "$USED" | grep -qx "$o"; then
-    NEXT="$o"
-    break
-  fi
-done
-
-if [ -z "$NEXT" ]; then
-  echo "No available IPs left in 10.8.0.0/24."
-  exit 1
-fi
-
-IP="10.8.0.$NEXT"
-
 umask 077
-PRIV="$(wg genkey)"
-PUB="$(echo "$PRIV" | wg pubkey)"
-
-CONF="$DIR/$NAME.conf"
-
-# FULL TUNNEL, NO DNS LINE
-cat > "$CONF" << EOC
-[Interface]
-PrivateKey = $PRIV
-Address = $IP/32
-
-[Peer]
-PublicKey = $SERVER_PUB
-Endpoint = ${SERVER_IP:-YOUR_SERVER_PUBLIC_IP}:$SERVER_PORT
-AllowedIPs = 0.0.0.0/0, ::/0
-PersistentKeepalive = 25
-EOC
-
-# QR as PNG only (no terminal QR)
-qrencode -t PNG -o "$DIR/$NAME.png" < "$CONF"
-chmod 600 "$CONF" "$DIR/$NAME.png"
-
-# Add peer to server config
-cat >> "$SERVER_CONF" << EOP
-
-[Peer]
-# $NAME
-PublicKey = $PUB
-AllowedIPs = $IP/32
-EOP
-chmod 600 "$SERVER_CONF"
-
-# Apply changes safely
-if wg show wg0 >/dev/null 2>&1; then
-  wg syncconf wg0 <(wg-quick strip wg0)
-else
-  systemctl restart wg-quick@wg0
+[[ $EUID -eq 0 ]] || { echo 'Run as root.' >&2; exit 1; }
+command -v apt-get >/dev/null || { echo 'Requires Debian/Ubuntu with APT.' >&2; exit 1; }
+[[ -d /run/systemd/system ]] || { echo 'Requires systemd.' >&2; exit 1; }
+STASH_STATE=/var/lib/stash-split-tunnel
+if [[ ! -e "$STASH_STATE/.installing" ]] && [[ -e /etc/wireguard/wg-stash.conf || -e "$STASH_STATE/settings.json" ]]; then
+    echo 'Already installed. Existing server keys and clients will not be overwritten.' >&2
+    echo 'Use stash status, stash new, stash url or stash rules.' >&2
+    exit 1
 fi
-
-echo "[+] Client created:"
-echo "    Dir   : $DIR"
-echo "    Conf  : $CONF"
-echo "    QR PNG: $DIR/$NAME.png"
-echo "    IP    : $IP"
-EOF
-
-chmod +x /usr/local/bin/new
-
-cat > /usr/local/bin/remove << 'EOF'
-#!/bin/bash
-set -euo pipefail
-
-CLIENTS_DIR="/Wireguard/client"
-WG_CONF="/etc/wireguard/wg0.conf"
-
-die(){ echo "ERROR: $*" >&2; exit 1; }
-
-[[ $EUID -eq 0 ]] || die "Run as root."
-[[ -d "$CLIENTS_DIR" ]] || die "Missing $CLIENTS_DIR"
-[[ -f "$WG_CONF" ]] || die "Missing $WG_CONF"
-
-# List client directories
-mapfile -d '' DIRS < <(find "$CLIENTS_DIR" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
-
-if [[ ${#DIRS[@]} -eq 0 ]]; then
-  die "No clients found in $CLIENTS_DIR"
+if [[ ! -e "$STASH_STATE/.installing" ]] && { [[ -e /etc/wireguard/wg0.conf ]] || command -v caddy >/dev/null; }; then
+    echo 'Use a fresh VPS. Existing WireGuard/Caddy configuration detected.' >&2
+    exit 1
 fi
+install -d -m 750 "$STASH_STATE"
+touch "$STASH_STATE/.installing"
+echo 'Stash Split Tunnel: experimental Apple TV test release.'
+echo 'Uses device system DNS upstream; strict DNS and playback acceptance need device testing.'
+echo 'Requires inbound TCP 80/443 and UDP 51820, including provider firewalls.'
 
-echo ""
-echo "Clients:"
-for i in "${!DIRS[@]}"; do
-  printf "  [%d] %s\n" "$((i+1))" "$(basename "${DIRS[$i]}")"
-done
-echo ""
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y wireguard iptables curl ca-certificates python3 python3-yaml gnupg debian-keyring debian-archive-keyring apt-transport-https
 
-read -r -p "Select client number to REMOVE: " choice
-[[ "$choice" =~ ^[0-9]+$ ]] || die "Not a number."
-(( choice >= 1 && choice <= ${#DIRS[@]} )) || die "Out of range."
+STASH_TMP="$(mktemp -d)"
+trap 'rm -rf -- "$STASH_TMP"' EXIT
+STASH_SOURCE='https://raw.githubusercontent.com/waqaarhussain/stash-split-tunnel/main'
+# Digests are updated together with the release files. Never execute a partial
+# or mismatched download after a failed/mid-update fetch.
+curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 10 --max-time 60 "$STASH_SOURCE/manager.py" -o "$STASH_TMP/manager.py"
+curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 10 --max-time 60 "$STASH_SOURCE/firewall" -o "$STASH_TMP/firewall"
+echo '148cbd9d1d24bf52bd035bcc2436e9be9797ecffff251d06a177fcc6381c1409  '"$STASH_TMP/manager.py" | sha256sum -c -
+echo '2222a6647e6f7e919e48865cd706a635dd1ca9d9aa9bf99dea3d992d28b13fe3  '"$STASH_TMP/firewall" | sha256sum -c -
+python3 -m py_compile "$STASH_TMP/manager.py"
+bash -n "$STASH_TMP/firewall"
 
-TARGET_DIR="${DIRS[$((choice-1))]}"
-NAME="$(basename "$TARGET_DIR")"
-
-echo ""
-echo "Selected: $NAME"
-read -r -p "Type YES to confirm: " confirm
-[[ "$confirm" == "YES" ]] || die "Cancelled."
-
-# Backup server config first
-BACKUP="${WG_CONF}.bak.$(date +%Y%m%d-%H%M%S)"
-cp -a "$WG_CONF" "$BACKUP"
-
-# Remove the peer block that contains:
-# [Peer]
-# # NAME
-python3 - <<PY
-import pathlib
-
-wg_conf = pathlib.Path("$WG_CONF")
-name = "$NAME"
-
-text = wg_conf.read_text(encoding="utf-8", errors="surrogateescape")
-blocks = text.split("\n\n")
-
-kept = []
-removed = 0
-for b in blocks:
-    lines = [ln.strip() for ln in b.splitlines()]
-    if "[Peer]" in lines and f"# {name}" in lines:
-        removed += 1
-        continue
-    kept.append(b)
-
-wg_conf.write_text("\n\n".join(kept).rstrip() + "\n", encoding="utf-8", errors="surrogateescape")
-print(f"Removed peer blocks: {removed}")
+STASH_IP="$(curl --proto '=https' --tlsv1.2 -4fsS --connect-timeout 10 --max-time 20 https://api.ipify.org)"
+python3 - "$STASH_IP" <<'PY'
+import ipaddress, sys
+ip = ipaddress.ip_address(sys.argv[1])
+if ip.version != 4 or not ip.is_global:
+    raise SystemExit('Could not detect a public IPv4 address')
 PY
 
-# Apply changes to running wg0
-if wg show wg0 >/dev/null 2>&1; then
-  wg syncconf wg0 <(wg-quick strip wg0)
+# Official Caddy stable package repository, with its scoped signing key.
+curl --proto '=https' --tlsv1.2 -fsSL --max-time 60 https://dl.cloudsmith.io/public/caddy/stable/gpg.key -o "$STASH_TMP/caddy.key"
+gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg "$STASH_TMP/caddy.key"
+curl --proto '=https' --tlsv1.2 -fsSL --max-time 60 https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt -o /etc/apt/sources.list.d/caddy-stable.list
+chmod 644 /usr/share/keyrings/caddy-stable-archive-keyring.gpg /etc/apt/sources.list.d/caddy-stable.list
+apt-get update
+apt-get install -y caddy
+
+id stash-split >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin stash-split
+install -d -m 755 /usr/local/lib/stash-split-tunnel
+install -d -m 750 -o root -g stash-split /var/lib/stash-split-tunnel
+install -d -m 700 /etc/wireguard
+install -m 755 "$STASH_TMP/manager.py" /usr/local/lib/stash-split-tunnel/manager.py
+install -m 755 "$STASH_TMP/firewall" /usr/local/lib/stash-split-tunnel/firewall
+cat > /usr/local/bin/stash <<'EOF'
+#!/bin/bash
+exec /usr/bin/python3 /usr/local/lib/stash-split-tunnel/manager.py "$@"
+EOF
+chmod 755 /usr/local/bin/stash
+if [[ -e "$STASH_STATE/settings.json" ]]; then
+    for STASH_EXISTING in clients.json rules.json domains.txt; do
+        [[ -f "$STASH_STATE/$STASH_EXISTING" ]] || { echo 'Incomplete initialization. Preserve the state directory and inspect it before retrying.' >&2; exit 1; }
+    done
+    [[ -f /etc/wireguard/wg-stash.conf ]] || { echo 'Server config missing. Preserve existing keys before attempting recovery.' >&2; exit 1; }
+    # Resume a failed installation without changing existing keys or URLs.
+    STASH_IP="$(python3 -c 'import json; print(json.load(open("/var/lib/stash-split-tunnel/settings.json"))["endpoint"])')"
 else
-  systemctl restart wg-quick@wg0 || true
+    stash init "$STASH_IP"
+fi
+if ! stash rules; then
+    echo 'Rules source unavailable. Bundled seed retained; the timer will retry.' >&2
 fi
 
-# Delete client directory
-rm -rf -- "$TARGET_DIR"
+cat > /etc/sysctl.d/99-stash-split-tunnel.conf <<'EOF'
+net.ipv4.ip_forward=1
+EOF
+sysctl -p /etc/sysctl.d/99-stash-split-tunnel.conf
 
-echo ""
-echo "DONE."
-echo "Removed client : $NAME"
-echo "Deleted folder : $TARGET_DIR"
-echo "Config backup  : $BACKUP"
+cat > /etc/systemd/system/stash-subscriptions.service <<'EOF'
+[Unit]
+Description=Private Stash subscription URL service
+After=network.target
+[Service]
+User=stash-split
+Group=stash-split
+ExecStart=/usr/local/bin/stash serve
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+[Install]
+WantedBy=multi-user.target
+EOF
+cat > /etc/systemd/system/stash-rules.service <<'EOF'
+[Unit]
+Description=Refresh Stash service domain list, keeping last good copy on failure
+Wants=network-online.target
+After=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/stash rules
+TimeoutStartSec=60
+EOF
+cat > /etc/systemd/system/stash-rules.timer <<'EOF'
+[Unit]
+Description=Refresh domain list on the hour and half hour
+[Timer]
+OnCalendar=*-*-* *:00,30:00
+Persistent=true
+AccuracySec=1s
+[Install]
+WantedBy=timers.target
 EOF
 
-chmod +x /usr/local/bin/remove
+cat > /usr/local/lib/stash-split-tunnel/health <<'EOF'
+#!/bin/bash
+set -euo pipefail
+# Restart only an absent interface or failed service, never an idle peer.
+if ! wg show wg-stash >/dev/null 2>&1; then
+    systemctl restart wg-quick@wg-stash
+fi
+for unit in stash-subscriptions caddy; do
+    if ! systemctl is-active --quiet "$unit"; then
+        systemctl start "$unit"
+    fi
+done
+EOF
+chmod 755 /usr/local/lib/stash-split-tunnel/health
+cat > /etc/systemd/system/stash-health.service <<'EOF'
+[Unit]
+Description=Recover missing Stash services without restarting idle peers
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/stash-split-tunnel/health
+TimeoutStartSec=60
+EOF
+cat > /etc/systemd/system/stash-health.timer <<'EOF'
+[Unit]
+Description=Check Stash services every five minutes
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+[Install]
+WantedBy=timers.target
+EOF
+
+# A public IP certificate avoids requiring a DNS name. Explicit ACME issuer
+# prevents Caddy from choosing its local/self-signed CA for this address.
+cat > /etc/caddy/Caddyfile <<EOF
+{
+    default_sni $STASH_IP
+    auto_https disable_redirects
+}
+https://$STASH_IP {
+    tls {
+        issuer acme {
+            dir https://acme-v02.api.letsencrypt.org/directory
+            profile shortlived
+        }
+    }
+    @subscriptions path /s/*
+    handle @subscriptions {
+        reverse_proxy 127.0.0.1:8765
+    }
+    handle {
+        respond "Not found" 404
+    }
+}
+EOF
+chmod 644 /etc/caddy/Caddyfile
+caddy validate --config /etc/caddy/Caddyfile
+
+if command -v ufw >/dev/null && ufw status | head -n 1 | grep -q 'Status: active'; then
+    ufw allow 80/tcp
+    ufw allow 443/tcp
+    ufw allow 51820/udp
+fi
+# Allow the services even on hosts with an INPUT policy of DROP.
+for STASH_PORT in 80 443; do
+    iptables -w -C INPUT -p tcp --dport "$STASH_PORT" -j ACCEPT 2>/dev/null || iptables -w -I INPUT 1 -p tcp --dport "$STASH_PORT" -j ACCEPT
+done
+iptables -w -C INPUT -p udp --dport 51820 -j ACCEPT 2>/dev/null || iptables -w -I INPUT 1 -p udp --dport 51820 -j ACCEPT
+
+systemctl daemon-reload
+systemctl enable --now wg-quick@wg-stash stash-subscriptions stash-rules.timer stash-health.timer
+systemctl enable caddy
+systemctl restart caddy
+
+echo 'Waiting up to one minute for a trusted HTTPS IP certificate...'
+STASH_TLS_OK=0
+for STASH_ATTEMPT in $(seq 1 15); do
+    # 404 is expected at /; curl succeeds only if TLS trust/hostname checks pass.
+    if curl --noproxy '*' -sS --connect-timeout 2 --max-time 3 "https://$STASH_IP/" -o /dev/null 2>/dev/null; then
+        STASH_TLS_OK=1
+        break
+    fi
+    sleep 1
+done
+echo
+stash status
+if [[ "$STASH_TLS_OK" -ne 1 ]]; then
+    echo 'HTTPS is not ready. Check inbound TCP 80/443 and journalctl -u caddy.' >&2
+    echo 'Do not import a URL until its HTTPS certificate validates. Do not bypass certificate verification.' >&2
+    exit 1
+fi
+rm -f "$STASH_STATE/.installing"
+echo
+echo 'Installed TEST RELEASE. Create a device: stash new'
+echo 'Then paste its private subscription URL into Stash > Download from URL.'
+echo 'Verify device DNS and YouTube playback. This release is not yet device-validated.'
