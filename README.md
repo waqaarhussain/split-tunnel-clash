@@ -21,10 +21,10 @@ Certificate issuance and automatic renewals require the server to stay reachable
 After the installer reports HTTPS ready:
 
 ```bash
-stash new
+new
 ```
 
-Enter a simple client name, such as `AppleTV`. The helper prints its private HTTPS subscription URL and a `stash://install-config` import link. In Stash, use **Configuration > Download from URL**, select the imported profile, and use **Rule** mode. You do not need to edit or transfer a local YAML file. The URL downloads a Stash configuration; it is not a VPN provider subscription or a paid service.
+Enter a simple client name, such as `iPhone`, `iPad` or `AppleTV`. The helper prints its private HTTPS subscription URL and a `stash://install-config` import link. In Stash, use **Configuration > Download from URL**, select the imported profile, and use **Rule** mode. You do not need to edit or transfer a local YAML file. The URL downloads a Stash configuration; it is not a VPN provider subscription or a paid service.
 
 Use one client per device. URLs contain bearer tokens and the configuration includes that client's private key. Anyone who obtains a URL can use that client's access. Keep URLs out of public posts, screenshots and GitHub. The subscription backend listens only on loopback behind HTTPS, has no administration endpoints, and does not log request paths. Removing a client revokes both its server peer and URL; a previously downloaded profile then cannot authenticate to the server.
 
@@ -81,11 +81,13 @@ The service selection changes the domain catalog, not the exit server. Each VPS 
 
 ## Helpers
 
+`new` creates a Stash client for any supported device. `stash new` remains available as an equivalent command.
+
 Run as root:
 
 | Command | Action |
 | --- | --- |
-| `stash new` | Ask for a name and create a client, keys and private URL |
+| `new` | Ask for a name and create a client, keys and private URL |
 | `stash list` | List client names |
 | `stash url` | Select a client and display its existing URLs |
 | `stash remove` | Select a client; type `YES` to revoke its peer and URL |
@@ -95,7 +97,7 @@ Run as root:
 | `stash service custom` | Use only the custom domain list |
 | `stash status` | Show services, rule age, handshake age and DNS rejection counters |
 
-`stash new AppleTV` and `stash url AppleTV` also accept names directly. Client operations are serialized to avoid address allocation races, and peer changes use `wg syncconf` to avoid restarting unrelated sessions. Failed peer updates attempt to restore the previous server configuration.
+`new iPhone` and `stash url iPhone` also accept names directly. Client operations are serialized to avoid address allocation races, and peer changes use `wg syncconf` to avoid restarting unrelated sessions. Failed peer updates attempt to restore the previous server configuration.
 
 The health timer restarts a missing WireGuard interface or starts an inactive subscription/Caddy service. It does not interpret idle handshakes as a failure or periodically reboot the VPN. WireGuard handles key renegotiation itself. Restarting a VPS cannot flush caches on an Apple TV.
 
