@@ -269,10 +269,11 @@ def make_config(settings, client):
                      'server': settings['endpoint'], 'port': settings.get('wg_port', 51821),
                      'ip': client['ip'], 'private-key': client['private'],
                      'public-key': settings['server_public'],
-                     # Explicitly disable public remote DNS defaults. There is
-                     # deliberately no DNS listener at this tunnel address.
-                     # Any mandatory remote lookup fails rather than leaks.
-                     'dns': ['10.88.0.1'], 'mtu': 1380, 'keepalive': 25}],
+                     # Do not force a transport resolver. The previous local
+                     # sink was observed blocking YouTube DNS on the device.
+                     # Keep remote DNS firewall blocks while validating the
+                     # adapter's default resolution behavior with system DNS.
+                     'mtu': 1380, 'keepalive': 25}],
         'rule-providers': {'selected-service': {'behavior': 'classical',
             'format': 'yaml', 'url': base + '/rules.yaml',
             'interval': 1800}},

@@ -121,8 +121,8 @@ class ManagerTests(unittest.TestCase):
             self.assertEqual(config['dns'][option], ['system'])
         self.assertNotIn('fallback', config['dns'])
         self.assertFalse(config['dns']['follow-rule'])
-        # An unavailable tunnel-local DNS sink prevents public remote defaults.
-        self.assertEqual(config['proxies'][0]['dns'], ['10.88.0.1'])
+        # Never reintroduce the dead resolver observed blocking YouTube.
+        self.assertNotIn('dns', config['proxies'][0])
         self.assertEqual(config['rules'][-1], 'MATCH,DIRECT')
         self.assertEqual(config['rule-providers']['selected-service']['interval'], 1800)
         self.assertEqual(yaml.safe_load(yaml.safe_dump(config)), config)
