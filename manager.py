@@ -235,14 +235,12 @@ def show_url(name):
     clients, settings = load('clients.json'), load('settings.json')
     if name not in clients:
         raise ValueError('Unknown client')
-    url = subscription_base(settings, clients[name]) + '/config.yaml'
-    print('Stash subscription URL (private):\n' + url)
-    print('\nOne-tap import link:\nstash://install-config?url=' + quote(url, safe=''))
-    print('\nIn Stash: Configuration > Download from URL. Choose Rule mode.')
-    print('\nOptional Clash/Mihomo TEST profile (not for Stash):\n' +
-          subscription_base(settings, clients[name]) + '/mihomo.yaml')
-    print('Disconnect Stash before testing Clash with this same client.')
-    print('TEST RELEASE: verify device DNS and YouTube playback before relying on it.')
+    url = subscription_base(settings, clients[name]) + '/mihomo.yaml'
+    print('Clash subscription URL (private):\n' + url)
+    print('Import into Clash as a remote profile. Use Rule mode.')
+    print('DNS: ' + ('explicit Control D DoH' if settings.get('mihomo_doh') else
+                      'system trial; run stash dns to set Control D DoH'))
+    print('Use one active app per client. Do not share private subscription URLs.')
 
 
 def remove_client(name):
@@ -367,12 +365,13 @@ class Gateway(BaseHTTPRequestHandler):
 def status():
     clients = load('clients.json')
     metadata = load('rules.json')
-    print('TEST RELEASE: Apple TV DNS/playback acceptance is pending.')
+    print('Clash split tunnel: iPhone playback reported working; Apple TV acceptance pending.')
+    print('Clash DNS: ' + ('explicit Control D DoH' if load('settings.json').get('mihomo_doh') else 'system trial (not encrypted-profile inheritance)'))
     print('Endpoint: ' + load('settings.json')['endpoint'])
     print('Clients: ' + str(len(clients)))
     print('Domain rules: ' + str(len(current_rules())))
     print('Last successful rule refresh: ' + metadata['updated'])
-    print('Refresh schedule: every hour at :00 and :30; Stash fetch interval: 1800 seconds.')
+    print('Refresh schedule: every hour at :00 and :30; Client rule fetch interval: 1800 seconds.')
     for unit in ('wg-quick@wg-stash', 'stash-subscriptions', 'stash-https', 'stash-rules.timer'):
         result = subprocess.run(['systemctl', 'is-active', unit], text=True, capture_output=True)
         print(unit + ': ' + result.stdout.strip())
