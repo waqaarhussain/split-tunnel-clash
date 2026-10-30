@@ -140,6 +140,28 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(config['rules'][-1], 'MATCH,DIRECT')
         self.assertEqual(yaml.safe_load(yaml.safe_dump(config)), config)
 
+    def test_opt_in_control_d_doh_and_system_restore(self):
+        self.add('Phone')
+        url = 'https://dns.controld.com/TEST_ONLY_ID'
+        with contextlib.redirect_stdout(io.StringIO()):
+            m.set_dns(url)
+        config = m.make_mihomo_config(m.load('settings.json'), m.load('clients.json')['Phone'])
+        for key in ('nameserver', 'direct-nameserver', 'proxy-server-nameserver'):
+            self.assertEqual(config['dns'][key], [url])
+        self.assertEqual(config['dns']['default-nameserver'], ['76.76.2.22'])
+        self.assertNotIn('fallback', config['dns'])
+        self.assertFalse(config['dns']['respect-rules'])
+        self.assertFalse(config['proxies'][0]['remote-dns-resolve'])
+        self.assertEqual(config['rules'][0], 'DOMAIN,dns.controld.com,DIRECT')
+        for bad in ('http://dns.controld.com/id', 'https://other.example/id',
+                    'https://dns.controld.com/id#proxy', 'https://dns.controld.com/'):
+            with self.assertRaises(ValueError):
+                m.set_dns(bad)
+            self.assertEqual(m.load('settings.json')['mihomo_doh'], url)
+        with contextlib.redirect_stdout(io.StringIO()):
+            m.set_dns('system')
+        self.assertNotIn('mihomo_doh', m.load('settings.json'))
+
     def test_rule_validation_ignores_shared_ip_rules_and_rejects_injection(self):
         rules = m.parse_rules('payload:\n - DOMAIN-SUFFIX,youtube.com\n - IP-CIDR,1.0.0.0/8\n')
         self.assertEqual(rules, ['DOMAIN-SUFFIX,youtube.com'])

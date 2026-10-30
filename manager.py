@@ -284,12 +284,33 @@ def make_config(settings, client):
                   'RULE-SET,selected-service,This VPS', 'MATCH,DIRECT']}
 
 
+def set_dns(value):
+    """Store an opt-in Control D DoH URL in private server state."""
+    settings = load('settings.json')
+    if value == 'system':
+        settings.pop('mihomo_doh', None)
+    elif re.fullmatch(r'https://dns\.controld\.com/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)?', value):
+        settings['mihomo_doh'] = value
+    else:
+        raise ValueError('Use your https://dns.controld.com/ resolver URL or system')
+    save('settings.json', settings)
+    print('Clash DNS updated. Refresh the imported profile and reconnect.')
+
+
 def make_mihomo_config(settings, client):
-    """Optional client trial: preserve local DNS, disable WG remote lookups."""
+    """Optional client trial with local resolution or explicit Control D DoH."""
     config = make_config(settings, client)
     config['dns'] = {'enable': True, 'nameserver': ['system'],
                      'default-nameserver': ['system'], 'respect-rules': False,
                      'enhanced-mode': 'fake-ip', 'fake-ip-range': '198.18.0.1/16'}
+    if settings.get('mihomo_doh'):
+        upstream = settings['mihomo_doh']
+        config['dns'].update({'nameserver': [upstream],
+            'direct-nameserver': [upstream], 'proxy-server-nameserver': [upstream],
+            # Only bootstrap the DoH hostname via Control D's documented IP.
+            # No system/public fallback for ordinary destination lookups.
+            'default-nameserver': ['76.76.2.22']})
+        config['rules'].insert(0, 'DOMAIN,dns.controld.com,DIRECT')
     proxy = config['proxies'][0]
     proxy.pop('keepalive', None)
     proxy.update({'persistent-keepalive': 25, 'remote-dns-resolve': False,
@@ -384,7 +405,7 @@ def choose_client():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['init', 'new', 'remove', 'url', 'list', 'rules', 'service', 'status', 'serve'])
+    parser.add_argument('command', choices=['init', 'new', 'remove', 'url', 'list', 'rules', 'service', 'dns', 'status', 'serve'])
     parser.add_argument('value', nargs='?')
     args = parser.parse_args()
     if args.command == 'serve':
@@ -404,6 +425,8 @@ def main():
             print('\n'.join(sorted(load('clients.json'))) or 'No clients')
         elif args.command == 'rules':
             refresh()
+        elif args.command == 'dns':
+            set_dns(args.value or input('Control D DoH URL (or system): ').strip())
         elif args.command == 'service':
             select_service(args.value)
         elif args.command == 'status':

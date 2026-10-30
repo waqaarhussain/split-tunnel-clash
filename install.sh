@@ -47,7 +47,7 @@ STASH_SOURCE='https://raw.githubusercontent.com/waqaarhussain/stash-split-tunnel
 # or mismatched download after a failed/mid-update fetch.
 curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 10 --max-time 60 "$STASH_SOURCE/manager.py" -o "$STASH_TMP/manager.py"
 curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 10 --max-time 60 "$STASH_SOURCE/firewall" -o "$STASH_TMP/firewall"
-echo 'e5c55b5ccf9145a8e825b0bc258a5a29a8f2afa441068f88e02e8372830c8bad  '"$STASH_TMP/manager.py" | sha256sum -c -
+echo 'edf9d8e61e5338769491489b21c66621fe569bb238959590797ca01bcda421c8  '"$STASH_TMP/manager.py" | sha256sum -c -
 echo '2222a6647e6f7e919e48865cd706a635dd1ca9d9aa9bf99dea3d992d28b13fe3  '"$STASH_TMP/firewall" | sha256sum -c -
 python3 -m py_compile "$STASH_TMP/manager.py"
 bash -n "$STASH_TMP/firewall"

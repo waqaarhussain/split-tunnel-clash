@@ -1,6 +1,6 @@
 # Stash Split Tunnel
 
-**Experimental. Live installation and WireGuard handshake have succeeded. Stash playback failed: device captures confirmed remote DNS queries through WireGuard, violating the required device-DNS policy. An optional Clash/Mihomo profile is available for testing; its Apple device DNS behavior and playback are not yet verified.**
+**Experimental. Live installation and WireGuard handshake have succeeded. Stash playback failed: device captures confirmed remote DNS queries through WireGuard, violating the required device-DNS policy. Clash/Mihomo playback has worked on iPhone, but the system DNS choice did not preserve the installed Control D encrypted DNS profile. Explicit Control D DoH is now an opt-in workaround; its device acceptance remains pending.**
 
 Import a private URL into Stash once. Matching YouTube domains use that VPS's WireGuard connection; unmatched connections use `DIRECT` through the device's normal network. Stash is the client app; WireGuard remains the server transport. The original [wireguard-server](https://github.com/waqaarhussain/wireguard-server) repository is separate and unchanged.
 
@@ -13,6 +13,14 @@ After updating the manager, run `stash url` and choose your existing client. Imp
 The trial uses the same peer, firewall guards and scheduled domain rules. Main DNS upstream is `system`, WireGuard remote DNS resolution is explicitly disabled, matching service domains go to this VPS, and the default is DIRECT. Fake-IP mapping is local inside the app, not a replacement public DNS provider. Whether Apple's system resolver exposes the existing encrypted Control D profile correctly must be checked on the device. Verify Control D activity and playback, ordinary browsing staying direct, and no DNS requests inside `wg-stash`. A working handshake alone is not acceptance. The domain list is community maintained, not Control D's proprietary service list; complete service coverage is not guaranteed.
 
 No reinstall, peer recreation, Nginx change or WireGuard restart is required to add this optional subscription format.
+
+## Explicit Control D DNS for Clash
+
+This is an opt-in change to the original requirement: Clash uses a chosen Control D resolver rather than automatically inheriting whichever encrypted DNS profile the device has. Run `stash dns`, then paste the existing Control D DoH URL. The URL is stored in private server state, not source code or GitHub. All Clash subscriptions on this VPS use that resolver after refreshing their full profile and reconnecting. The Stash profile is unchanged.
+
+The main, direct and proxy-endpoint resolvers use that DoH URL. Queries connect directly (`respect-rules: false`); WireGuard remote resolution remains disabled. The bootstrap lookup for `dns.controld.com` uses Control D's documented `76.76.2.22` resolver. There is no ordinary-destination fallback to system DNS. YouTube redirection must remain disabled in the chosen Control D profile, or it can return the old SNI address instead of the actual destination. Confirm the expected resolver ID on Control D's configuration page, YouTube playback, and DIRECT routing for unrelated browsing after reconnecting. This does not alter the VPS's own DNS configuration.
+
+Run `stash dns system` to remove the override, refresh the profile and reconnect. That restores the earlier system-DNS trial, not a guarantee that an installed Apple encrypted DNS profile is inherited.
 
 ## Install alongside an existing SNI proxy
 
