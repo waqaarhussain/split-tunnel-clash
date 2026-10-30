@@ -163,7 +163,8 @@ def initialize(endpoint):
         raise ValueError('Already initialized; existing keys will not be replaced')
     private = run('wg', 'genkey')
     public = run('wg', 'pubkey', data=private + '\n')
-    save('settings.json', {'endpoint': str(address), 'server_private': private,
+    save('settings.json', {'endpoint': str(address), 'wg_port': 51821,
+                          'https_port': 8443, 'server_private': private,
                           'server_public': public, 'rules_source': SOURCE,
                           'created': now()})
     save('clients.json', {})
@@ -173,7 +174,7 @@ def initialize(endpoint):
 
 
 def render_wg(settings, clients):
-    result = ('[Interface]\nAddress = 10.88.0.1/24\nListenPort = 51820\n'
+    result = ('[Interface]\nAddress = 10.88.0.1/24\nListenPort = ' + str(settings.get('wg_port', 51821)) + '\n'
               'PrivateKey = ' + settings['server_private'] + '\n'
               'PostUp = /usr/local/lib/stash-split-tunnel/firewall up\n'
               'PostDown = /usr/local/lib/stash-split-tunnel/firewall down\n')
@@ -232,7 +233,7 @@ def show_url(name):
     clients, settings = load('clients.json'), load('settings.json')
     if name not in clients:
         raise ValueError('Unknown client')
-    url = 'https://' + settings['endpoint'] + '/s/' + clients[name]['token'] + '/config.yaml'
+    url = subscription_base(settings, clients[name]) + '/config.yaml'
     print('Stash subscription URL (private):\n' + url)
     print('\nOne-tap import link:\nstash://install-config?url=' + quote(url, safe=''))
     print('\nIn Stash: Configuration > Download from URL. Choose Rule mode.')
@@ -250,15 +251,20 @@ def remove_client(name):
     print('Removed peer and revoked subscription URL: ' + name)
 
 
+def subscription_base(settings, client):
+    return ('https://' + settings['endpoint'] + ':' + str(settings.get('https_port', 8443))
+            + '/s/' + client['token'])
+
+
 def make_config(settings, client):
-    base = 'https://' + settings['endpoint'] + '/s/' + client['token']
+    base = subscription_base(settings, client)
     return {
         'mode': 'rule', 'log-level': 'info', 'ipv6': False,
         'dns': {'default-nameserver': ['system'], 'nameserver': ['system'],
                 'proxy-server-nameserver': ['system'], 'follow-rule': False,
                 'fake-ip-filter': ['*']},
         'proxies': [{'name': 'This VPS', 'type': 'wireguard',
-                     'server': settings['endpoint'], 'port': 51820,
+                     'server': settings['endpoint'], 'port': settings.get('wg_port', 51821),
                      'ip': client['ip'], 'private-key': client['private'],
                      'public-key': settings['server_public'],
                      # Explicitly disable public remote DNS defaults. There is
@@ -322,7 +328,7 @@ def status():
     print('Domain rules: ' + str(len(current_rules())))
     print('Last successful rule refresh: ' + metadata['updated'])
     print('Refresh schedule: every hour at :00 and :30; Stash fetch interval: 1800 seconds.')
-    for unit in ('wg-quick@wg-stash', 'stash-subscriptions', 'caddy', 'stash-rules.timer'):
+    for unit in ('wg-quick@wg-stash', 'stash-subscriptions', 'stash-https', 'stash-rules.timer'):
         result = subprocess.run(['systemctl', 'is-active', unit], text=True, capture_output=True)
         print(unit + ': ' + result.stdout.strip())
     try:

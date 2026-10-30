@@ -4,9 +4,9 @@
 
 Import a private URL into Stash once. Matching YouTube domains use that VPS's WireGuard connection; unmatched connections use `DIRECT` through the device's normal network. Stash is the client app; WireGuard remains the server transport. The original [wireguard-server](https://github.com/waqaarhussain/wireguard-server) repository is separate and unchanged.
 
-## Install on a fresh VPS
+## Install alongside an existing SNI proxy
 
-Requires Debian/Ubuntu with APT, systemd and a public IPv4 address. Inbound TCP 80/443 and UDP 51820 must be reachable, including in any provider firewall. Use a dedicated fresh server; the installer refuses an existing `wg0` or Caddy installation.
+Requires Debian/Ubuntu with APT, systemd and a public IPv4 address. Inbound TCP 80/8443 and UDP 51821 must be reachable, including in any provider firewall. Existing Nginx/SNI on TCP 443 and an existing `wg0` on UDP 51820 can remain running. Stash uses its own `wg-stash` interface, subnet and HTTPS service. The installer stops if one of its new ports or its VPN subnet is already occupied.
 
 Run as root. `curl` must already be installed:
 
@@ -14,7 +14,11 @@ Run as root. `curl` must already be installed:
 curl -fsSL https://raw.githubusercontent.com/waqaarhussain/stash-split-tunnel/main/install.sh -o /tmp/stash-split-tunnel-install.sh && bash /tmp/stash-split-tunnel-install.sh
 ```
 
-The installer detects this VPS's public IPv4, configures `wg-stash` on `10.88.0.1/24`, installs Caddy from its official stable package repository, and requests a publicly trusted short-lived Let's Encrypt IP certificate. No purchased domain name is required. The detected IP is written into this server's state and client subscriptions, rather than hardcoded in the installer.
+The installer detects this VPS's public IPv4 and configures `wg-stash` on `10.88.0.1/24`, UDP 51821. It extracts a Caddy binary from the signed official stable package without installing or starting the global `caddy.service`. The separate `stash-https` service serves subscription URLs on TCP 8443 and requests a publicly trusted short-lived Let's Encrypt IP certificate. No purchased domain name is required. The detected IP is written into this server's state and client subscriptions, rather than hardcoded in the installer.
+
+For an active Nginx installation, it saves a root-only backup of `/etc/nginx`, then adds only `/etc/nginx/conf.d/stash-acme.conf`. This HTTP virtual host matches requests addressed to the VPS IP on port 80. It forwards `/.well-known/acme-challenge/` to Caddy on port 9080; other HTTP requests addressed directly to that IP return 404. Existing hostname-based HTTP virtual hosts continue using their own rules. The existing SNI stream configuration and TCP 443 listener are not edited. Nginx is syntax-checked before a graceful reload, and the new route is removed if validation fails. An unsupported Nginx include/layout or a conflicting IP virtual host causes the installer to stop for inspection. A server without Nginx gets a minimal HTTP challenge route.
+
+The installer records the hashes of the existing `wg0.conf` and SNI stream file plus the running `wg0` public key, then compares them before reporting readiness. It does not restart `wg0` or the global Caddy service. A pre-existing `/usr/local/bin/new` is backed up to `/var/lib/stash-split-tunnel/new-helper-backup` before Stash installs its own `new` helper.
 
 Certificate issuance and automatic renewals require the server to stay reachable. Certificate failures are reported; TLS verification is never disabled. If an installation fails midway, rerun the installer to resume using its incomplete-install marker. Existing initialized keys and clients are preserved. Completed installations refuse to run again; this is not an update command.
 
@@ -99,7 +103,7 @@ Run as root:
 
 `new iPhone` and `stash url iPhone` also accept names directly. Client operations are serialized to avoid address allocation races, and peer changes use `wg syncconf` to avoid restarting unrelated sessions. Failed peer updates attempt to restore the previous server configuration.
 
-The health timer restarts a missing WireGuard interface or starts an inactive subscription/Caddy service. It does not interpret idle handshakes as a failure or periodically reboot the VPN. WireGuard handles key renegotiation itself. Restarting a VPS cannot flush caches on an Apple TV.
+The health timer restarts a missing WireGuard interface or starts an inactive Stash subscription/HTTPS service. It does not interpret idle handshakes as a failure or periodically reboot the VPN. WireGuard handles key renegotiation itself. Restarting a VPS cannot flush caches on an Apple TV.
 
 ## First device acceptance test
 
@@ -118,17 +122,17 @@ Do not call the strict DNS requirement or all-YouTube routing confirmed until th
 ```bash
 stash status
 systemctl list-timers 'stash-*'
-journalctl -u caddy -n 50 --no-pager
+journalctl -u stash-https -n 50 --no-pager
 journalctl -u stash-subscriptions -n 50 --no-pager
 journalctl -u stash-rules -n 50 --no-pager
 wg show wg-stash
 ```
 
-Keep Caddy's data directory intact across reboots so it can reuse and renew certificates. Keep `/var/lib/stash-split-tunnel` and `/etc/wireguard/wg-stash.conf` private and backed up. Moving to a different public IP requires deliberate endpoint, certificate and subscription migration; IP detection at install time does not make old IP-based URLs follow a new server automatically.
+Keep `/var/lib/stash-https` intact across reboots so it can reuse and renew certificates. Keep `/var/lib/stash-split-tunnel` and `/etc/wireguard/wg-stash.conf` private and backed up. Moving to a different public IP requires deliberate endpoint, certificate and subscription migration; IP detection at install time does not make old IP-based URLs follow a new server automatically.
 
 ## Validation performed
 
-`python3 -m unittest -v test_manager` checks address/key isolation, invalid names, pool exhaustion, failed peer-update rollback, generated system-DNS/direct-default configuration, malicious/invalid rule rejection, last-good rules, service-switch rollback, custom service switching, authenticated HTTP downloads, URL revocation, and firewall reapply/cleanup through simulated iptables. `bash -n` checks the installer and firewall. The systemd calendar expression is checked using `systemd-analyze calendar`.
+`python3 -m unittest -v test_manager` checks address/key isolation, invalid names, pool exhaustion, failed peer-update rollback, generated system-DNS/direct-default configuration, malicious/invalid rule rejection, last-good rules, service-switch rollback, custom service switching, authenticated HTTP downloads, URL revocation, firewall reapply/cleanup through simulated iptables, and Nginx challenge-route success/config-error/route-error handling through simulated commands. The Nginx tests verify the SNI stream fixture stays byte-identical and no stop/restart action is used. `bash -n` checks the installer and firewall. The systemd calendar expression is checked using `systemd-analyze calendar`.
 
 These are local automated checks. Real kernel WireGuard/firewall behavior, a complete fresh-VPS install, Caddy ACME issuance and Stash/Apple TV behavior remain untested. The installer validates Caddy's configuration and checks HTTPS trust on the target VPS before reporting the URLs ready for a test.
 

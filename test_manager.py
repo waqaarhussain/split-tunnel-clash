@@ -105,6 +105,8 @@ class ManagerTests(unittest.TestCase):
         client = m.load('clients.json')['TV']
         config = m.make_config(self.settings, client)
         self.assertEqual(config['proxies'][0]['server'], '203.0.113.8')
+        self.assertEqual(config['proxies'][0]['port'], 51821)
+        self.assertIn('203.0.113.8:8443/', config['rule-providers']['selected-service']['url'])
         for option in ('nameserver', 'default-nameserver', 'proxy-server-nameserver'):
             self.assertEqual(config['dns'][option], ['system'])
         self.assertNotIn('fallback', config['dns'])
@@ -236,6 +238,68 @@ p.write_text(json.dumps(d))
         subprocess.run(['bash', firewall, 'down'], env=env, check=True)
         for rules in json.loads(statefile.read_text()).values():
             self.assertEqual(rules, [])
+
+    def nginx_route_trial(self, failure):
+        bindir = self.root / 'mock-bin'
+        bindir.mkdir()
+        nginx_dir = self.root / 'nginx'
+        (nginx_dir / 'conf.d').mkdir(parents=True)
+        stream = nginx_dir / 'stream.conf'
+        stream.write_text('stream { server { listen 443; proxy_pass $ssl_preread_server_name:443; } }\n')
+        before = stream.read_bytes()
+        logfile = self.root / 'service-actions'
+        (bindir / 'nginx').write_text('''#!/bin/sh
+if [ "$1" = '-T' ]; then
+    if [ "$NGINX_TRIAL_FAILURE" = 'config' ]; then echo 'invalid test configuration'; exit 1; fi
+    echo "# configuration file $NGINX_TRIAL_DIR/conf.d/stash-acme.conf:"
+fi
+exit 0
+''')
+        (bindir / 'systemctl').write_text('''#!/bin/sh
+echo "$*" >> "$NGINX_TRIAL_LOG"
+exit 0
+''')
+        (bindir / 'curl').write_text('''#!/bin/sh
+if [ "$NGINX_TRIAL_FAILURE" = 'route' ]; then echo 'wrong-route'; else echo 'stash-acme-route-ok'; fi
+''')
+        for name in ('nginx', 'systemctl', 'curl'):
+            (bindir / name).chmod(0o755)
+        installer = Path(m.__file__).with_name('install.sh').read_text()
+        fragment = installer.split('STASH_NGINX_FILE=', 1)[1].split('\nif command -v ufw', 1)[0]
+        fragment = 'STASH_NGINX_FILE=' + fragment
+        fragment = fragment.replace('/etc/nginx', str(nginx_dir))
+        # The real branch backs up /etc/nginx; the test backs up its fixture.
+        fragment = fragment.replace('tar -C /etc ', 'tar -C "' + str(self.root) + '" ')
+        env = dict(os.environ, PATH=str(bindir) + ':' + os.environ['PATH'],
+                   STASH_STATE=str(self.state), STASH_TMP=str(self.root), STASH_IP='203.0.113.8',
+                   NGINX_TRIAL_DIR=str(nginx_dir), NGINX_TRIAL_LOG=str(logfile),
+                   NGINX_TRIAL_FAILURE=failure)
+        result = subprocess.run(['bash', '-euo', 'pipefail'], input=fragment,
+                                env=env, text=True, capture_output=True)
+        self.assertEqual(stream.read_bytes(), before)
+        actions = logfile.read_text().splitlines() if logfile.exists() else []
+        self.assertFalse(any('stop ' in a or 'restart ' in a for a in actions), actions)
+        return result, nginx_dir / 'conf.d/stash-acme.conf', actions
+
+    def test_nginx_challenge_addition_preserves_stream_and_only_reloads(self):
+        result, route, actions = self.nginx_route_trial('')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(route.exists())
+        self.assertIn('reload nginx', actions)
+        self.assertNotIn('listen 443', route.read_text())
+        self.assertIn('proxy_pass http://127.0.0.1:9080;', route.read_text())
+
+    def test_bad_nginx_config_is_removed_before_reload(self):
+        result, route, actions = self.nginx_route_trial('config')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(route.exists())
+        self.assertNotIn('reload nginx', actions)
+
+    def test_failed_nginx_route_check_removes_route_and_reloads_original(self):
+        result, route, actions = self.nginx_route_trial('route')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(route.exists())
+        self.assertEqual(actions.count('reload nginx'), 2)
 
 
 if __name__ == '__main__':
