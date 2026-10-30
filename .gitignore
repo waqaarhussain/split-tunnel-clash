@@ -1,0 +1,7 @@
+# Generated VPN secrets and client exports do not belong in this repository.
+/Wireguard/
+*.conf
+*.png
+*_privatekey
+*_publickey
+*.bak.*
