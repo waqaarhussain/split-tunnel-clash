@@ -260,9 +260,17 @@ echo "$*" >> "$NGINX_TRIAL_LOG"
 exit 0
 ''')
         (bindir / 'curl').write_text('''#!/bin/sh
+if [ "$NGINX_TRIAL_FAILURE" = 'transient' ]; then
+    count=0
+    [ ! -f "$NGINX_TRIAL_DIR/attempts" ] || count=$(cat "$NGINX_TRIAL_DIR/attempts")
+    count=$((count+1))
+    echo "$count" > "$NGINX_TRIAL_DIR/attempts"
+    if [ "$count" -lt 3 ]; then echo 'wrong-route'; exit 0; fi
+fi
 if [ "$NGINX_TRIAL_FAILURE" = 'route' ]; then echo 'wrong-route'; else echo 'stash-acme-route-ok'; fi
 ''')
-        for name in ('nginx', 'systemctl', 'curl'):
+        (bindir / 'sleep').write_text('#!/bin/sh\nexit 0\n')
+        for name in ('nginx', 'systemctl', 'curl', 'sleep'):
             (bindir / name).chmod(0o755)
         installer = Path(m.__file__).with_name('install.sh').read_text()
         fragment = installer.split('STASH_NGINX_FILE=', 1)[1].split('\nif command -v ufw', 1)[0]
@@ -294,6 +302,13 @@ if [ "$NGINX_TRIAL_FAILURE" = 'route' ]; then echo 'wrong-route'; else echo 'sta
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(route.exists())
         self.assertNotIn('reload nginx', actions)
+
+    def test_nginx_probe_retries_until_new_workers_serve_the_route(self):
+        result, route, actions = self.nginx_route_trial('transient')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(route.exists())
+        self.assertEqual((route.parent.parent / 'attempts').read_text().strip(), '3')
+        self.assertEqual(actions.count('reload nginx'), 1)
 
     def test_failed_nginx_route_check_removes_route_and_reloads_original(self):
         result, route, actions = self.nginx_route_trial('route')

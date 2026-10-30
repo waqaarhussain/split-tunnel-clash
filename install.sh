@@ -280,10 +280,21 @@ EOF
         echo 'Challenge route reload failed and was rolled back.' >&2
         exit 1
     fi
-    if [[ "$(curl --noproxy '*' -fsS --max-time 5 -H "Host: $STASH_IP" http://127.0.0.1/.well-known/acme-challenge/stash-route-check)" != 'stash-acme-route-ok' ]]; then
+    # A successful reload signal does not mean replacement workers already
+    # serve requests. An immediate probe may still reach the previous vhost.
+    STASH_ROUTE_OK=0
+    for STASH_ROUTE_ATTEMPT in $(seq 1 10); do
+        if [[ "$(curl --noproxy '*' -fsS --connect-timeout 1 --max-time 3 -H "Host: $STASH_IP" http://127.0.0.1/.well-known/acme-challenge/stash-route-check 2>/dev/null || true)" == 'stash-acme-route-ok' ]]; then
+            STASH_ROUTE_OK=1
+            break
+        fi
+        sleep 1
+    done
+    if [[ "$STASH_ROUTE_OK" -ne 1 ]]; then
         rm -f "$STASH_NGINX_FILE"
         nginx -t && systemctl reload nginx
-        echo 'Challenge route check failed; route removed. SNI configuration was not edited.' >&2
+        echo 'Challenge route still failed after retries; route removed. SNI configuration was not edited.' >&2
+        echo 'Send: nginx -T 2>&1 | grep -nE "configuration file|listen|server_name|return|location"' >&2
         exit 1
     fi
 else
