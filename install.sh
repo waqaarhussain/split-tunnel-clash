@@ -7,7 +7,7 @@ command -v apt-get >/dev/null || { echo 'Requires Debian/Ubuntu with APT.' >&2; 
 STASH_STATE=/var/lib/stash-split-tunnel
 if [[ ! -e "$STASH_STATE/.installing" ]] && [[ -e /etc/wireguard/wg-stash.conf || -e "$STASH_STATE/settings.json" ]]; then
     echo 'Already installed. Existing server keys and clients will not be overwritten.' >&2
-    echo 'Use stash status, stash new, stash url or stash rules.' >&2
+    echo 'Use new, stash status, stash url or stash rules.' >&2
     exit 1
 fi
 if [[ ! -e "$STASH_STATE/.installing" ]] && { [[ -e /etc/wireguard/wg0.conf ]] || command -v caddy >/dev/null; }; then
@@ -16,7 +16,7 @@ if [[ ! -e "$STASH_STATE/.installing" ]] && { [[ -e /etc/wireguard/wg0.conf ]] |
 fi
 install -d -m 750 "$STASH_STATE"
 touch "$STASH_STATE/.installing"
-echo 'Stash Split Tunnel: experimental Apple TV test release.'
+echo 'Stash Split Tunnel: experimental Stash device test release.'
 echo 'Uses device system DNS upstream; strict DNS and playback acceptance need device testing.'
 echo 'Requires inbound TCP 80/443 and UDP 51820, including provider firewalls.'
 
@@ -63,6 +63,11 @@ cat > /usr/local/bin/stash <<'EOF'
 exec /usr/bin/python3 /usr/local/lib/stash-split-tunnel/manager.py "$@"
 EOF
 chmod 755 /usr/local/bin/stash
+cat > /usr/local/bin/new <<'EOF'
+#!/bin/bash
+exec /usr/local/bin/stash new "$@"
+EOF
+chmod 755 /usr/local/bin/new
 if [[ -e "$STASH_STATE/settings.json" ]]; then
     for STASH_EXISTING in clients.json rules.json domains.txt; do
         [[ -f "$STASH_STATE/$STASH_EXISTING" ]] || { echo 'Incomplete initialization. Preserve the state directory and inspect it before retrying.' >&2; exit 1; }
@@ -215,6 +220,6 @@ if [[ "$STASH_TLS_OK" -ne 1 ]]; then
 fi
 rm -f "$STASH_STATE/.installing"
 echo
-echo 'Installed TEST RELEASE. Create a device: stash new'
+echo 'Installed TEST RELEASE. Create a client for any device: new'
 echo 'Then paste its private subscription URL into Stash > Download from URL.'
 echo 'Verify device DNS and YouTube playback. This release is not yet device-validated.'
