@@ -1,20 +1,39 @@
-# WireGuard Server Split Tunnel
+# Stash Split Tunnel
 
-**Status: baseline copy only. Split tunnelling is not implemented yet.**
+**Status: preparation stage. The existing installer is still the original full-tunnel WireGuard baseline. Stash URL generation and split routing are not implemented yet.**
 
-This separate project was copied from [wireguard-server](https://github.com/waqaarhussain/wireguard-server). Its installer is currently identical to the original. The intended next stage is YouTube-only routing with server-managed rules for VPS `45.88.89.23`; that design still needs verification before implementation. Wait for that work before resetting the VPS for a split-tunnel test.
+A project for Stash on Apple TV, iPhone and iPad, using a subscription URL imported once and centrally maintained domain rules. The original [wireguard-server](https://github.com/waqaarhussain/wireguard-server) repository remains separate.
 
-WireGuard VPS setup with interactive `new` and `remove` helpers. This is the original full-tunnel baseline, assembled from the nine supplied commands in their original order. The only added installer line is the Bash shebang; command bodies and helper code are preserved.
+## Intended behavior
 
-## Install
+- Send YouTube traffic through the selected VPS, using that VPS's own internet connection.
+- Send unmatched traffic directly through the device's normal ISP connection.
+- Detect each VPS's endpoint during setup rather than hardcoding a public IP into the installer.
+- Provide a private Stash subscription URL for each client, rather than requiring manual configuration-file editing.
+- Keep domain rules on the VPS and allow Stash to fetch updates periodically. The proposed server refresh schedule is at the hour and half hour; client fetching is a separate interval and is not guaranteed to occur at those exact clock times.
+- Use the DNS resolver already supplied by the device/network, without adding a public resolver or fallback. This is a required acceptance criterion, not a validated capability of the current implementation.
 
-Run in a root Bash session on a fresh Debian/Ubuntu-style VPS using APT and systemd. The download command requires `curl` to be installed already.
+Stash replaces the standard WireGuard client app in this design. WireGuard may still serve as the transport between Stash and the VPS; changing client apps does not itself require replacing the server protocol.
+
+## DNS acceptance requirement
+
+Stash documents `system` as an upstream DNS choice, but also has its own DNS handling and protocol-specific resolution. We have not verified that its WireGuard and proxied UDP paths can satisfy strict device-DNS-only operation. Do not describe the project as meeting that requirement until an Apple TV test confirms it.
+
+## Installation status
+
+Do not reset a VPS for a Stash split-tunnel test yet. This command currently installs only the preserved full-tunnel baseline; it does not generate Stash subscription URLs:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/waqaarhussain/wireguard-server-split-tunnel/main/install.sh -o /tmp/wireguard-server-split-tunnel-install.sh && bash /tmp/wireguard-server-split-tunnel-install.sh
+curl -fsSL https://raw.githubusercontent.com/waqaarhussain/stash-split-tunnel/main/install.sh -o /tmp/stash-split-tunnel-install.sh && bash /tmp/stash-split-tunnel-install.sh
 ```
 
-Fresh installation only. Rerunning this script regenerates the server keys and overwrites `/etc/wireguard/wg0.conf`, including existing peer entries. It is not an update command. The installer retains the original command error handling and is not transactional.
+For baseline installation only: run in a root Bash session on a fresh Debian/Ubuntu-style VPS with APT, systemd and `curl` available.
+
+Rerunning the existing installer regenerates the server keys and overwrites `/etc/wireguard/wg0.conf`, including existing peer entries. It is not an update command. The installer retains the original command error handling and is not transactional.
+
+## Current baseline reference
+
+The sections below describe the preserved installer, not the planned Stash interface.
 
 ## Helpers
 
@@ -57,7 +76,7 @@ Omitting the DNS field leaves DNS configuration to the client environment. It do
 - Client creation has no allocation lock for simultaneous runs.
 - Provider-level firewalls and existing host firewall policies are not managed by these commands, apart from the shown iptables rules and UFW allowance.
 
-These points are documented rather than changed, so this repository preserves the supplied baseline. There are no YouTube split-tunnel or DNS-server integration changes in this version.
+These points describe the unchanged baseline. Stash subscription hosting, domain-rule updates and strict DNS behavior still require implementation and validation.
 
 ## Validation
 
