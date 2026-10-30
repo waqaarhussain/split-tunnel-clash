@@ -210,8 +210,10 @@ def apply_clients(settings, clients):
 
 
 def add_client(name):
-    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', name):
-        raise ValueError('Use 1-64 letters, numbers, underscores or hyphens; start with a letter/number')
+    name = name.strip(' ')
+    if (not 1 <= len(name) <= 64 or not name.isprintable()
+            or '/' in name or '\\' in name or name in ('.', '..')):
+        raise ValueError('Use a name of 1-64 printable characters; no slashes or line breaks')
     clients, settings = load('clients.json'), load('settings.json')
     if name in clients:
         raise ValueError('Client already exists')

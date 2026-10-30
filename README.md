@@ -28,7 +28,7 @@ After the installer reports HTTPS ready:
 new
 ```
 
-Enter a simple client name, such as `iPhone`, `iPad` or `AppleTV`. The helper prints its private HTTPS subscription URL and a `stash://install-config` import link. In Stash, use **Configuration > Download from URL**, select the imported profile, and use **Rule** mode. You do not need to edit or transfer a local YAML file. The URL downloads a Stash configuration; it is not a VPN provider subscription or a paid service.
+Enter a client name, such as `Waqaar's iPhone 18 Pro Max`, `Family iPad` or `AppleTV`. Names can contain spaces, apostrophes and other printable characters, up to 64 characters; slashes and line breaks are rejected. The helper prints its private HTTPS subscription URL and a `stash://install-config` import link. In Stash, use **Configuration > Download from URL**, select the imported profile, and use **Rule** mode. You do not need to edit or transfer a local YAML file. The URL downloads a Stash configuration; it is not a VPN provider subscription or a paid service.
 
 Use one client per device. URLs contain bearer tokens and the configuration includes that client's private key. Anyone who obtains a URL can use that client's access. Keep URLs out of public posts, screenshots and GitHub. The subscription backend listens only on loopback behind HTTPS, has no administration endpoints, and does not log request paths. Removing a client revokes both its server peer and URL; a previously downloaded profile then cannot authenticate to the server.
 

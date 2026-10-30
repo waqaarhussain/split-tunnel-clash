@@ -72,10 +72,20 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual((self.state / 'clients.json').stat().st_mode & 0o777, 0o640)
 
     def test_names_cannot_inject_config_or_paths(self):
-        for name in ('../x', 'a/b', 'a\nb', 'a"b', '', '-test', 'x' * 65):
+        for name in ('../x', 'a/b', 'a\\b', 'a\nb', '', '   ', '.', '..', 'a\tb', 'a\x7fb', 'x' * 65):
             with self.assertRaises(ValueError):
                 self.add(name)
         self.assertEqual(m.load('clients.json'), {})
+
+    def test_display_names_allow_spaces_apostrophes_and_unicode(self):
+        names = ["Waqaar's iPhone 18 Pro Max", 'Waqaars 18 Pro Max',
+                 'Family iPad (Home)', 'Waqaar’s Apple TV', 'Phone "Test"']
+        for name in names:
+            self.add(name)
+        self.assertEqual(set(m.load('clients.json')), set(names))
+        self.assertEqual(self.conf.read_text().count('\n[Peer]\n'), len(names))
+        for name in names:
+            self.assertIn('# ' + name + '\n', self.conf.read_text())
 
     def test_duplicate_and_exhausted_pool_leave_state_unchanged(self):
         self.add('TV')
