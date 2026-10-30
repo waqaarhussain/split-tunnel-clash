@@ -1,8 +1,18 @@
 # Stash Split Tunnel
 
-**Experimental test release. The installer and subscription service are implemented. Live VPS installation, certificate issuance, Stash parsing, Apple TV playback and strict device-DNS behavior have not been verified on real devices.**
+**Experimental. Live installation and WireGuard handshake have succeeded. Stash playback failed: device captures confirmed remote DNS queries through WireGuard, violating the required device-DNS policy. An optional Clash/Mihomo profile is available for testing; its Apple device DNS behavior and playback are not yet verified.**
 
 Import a private URL into Stash once. Matching YouTube domains use that VPS's WireGuard connection; unmatched connections use `DIRECT` through the device's normal network. Stash is the client app; WireGuard remains the server transport. The original [wireguard-server](https://github.com/waqaarhussain/wireguard-server) repository is separate and unchanged.
+
+## Optional Clash/Mihomo trial on the existing installation
+
+[Clash - Rule Based Proxy](https://apps.apple.com/gb/app/clash-rule-based-proxy/id6794257189) advertises iPhone, iPad and Apple TV support and remote profile URLs. This is a different app from Stash. Mihomo documents `remote-dns-resolve: false` for WireGuard; this option is not assumed to work in Stash.
+
+After updating the manager, run `stash url` and choose your existing client. Import the **Clash/Mihomo TEST** HTTPS URL ending in `/mihomo.yaml` into Clash. Disconnect Stash before connecting Clash; never use the same peer from two clients at once. Use Rule mode and the original profile configuration, without resolver overrides. Keep the current Control D profile with YouTube redirect disabled.
+
+The trial uses the same peer, firewall guards and scheduled domain rules. Main DNS upstream is `system`, WireGuard remote DNS resolution is explicitly disabled, matching service domains go to this VPS, and the default is DIRECT. Fake-IP mapping is local inside the app, not a replacement public DNS provider. Whether Apple's system resolver exposes the existing encrypted Control D profile correctly must be checked on the device. Verify Control D activity and playback, ordinary browsing staying direct, and no DNS requests inside `wg-stash`. A working handshake alone is not acceptance. The domain list is community maintained, not Control D's proprietary service list; complete service coverage is not guaranteed.
+
+No reinstall, peer recreation, Nginx change or WireGuard restart is required to add this optional subscription format.
 
 ## Install alongside an existing SNI proxy
 

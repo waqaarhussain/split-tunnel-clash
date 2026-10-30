@@ -127,6 +127,19 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(config['rule-providers']['selected-service']['interval'], 1800)
         self.assertEqual(yaml.safe_load(yaml.safe_dump(config)), config)
 
+    def test_mihomo_trial_keeps_local_resolution_and_existing_peer(self):
+        self.add('Phone')
+        client = m.load('clients.json')['Phone']
+        config = m.make_mihomo_config(self.settings, client)
+        self.assertFalse(config['proxies'][0]['remote-dns-resolve'])
+        self.assertNotIn('dns', config['proxies'][0])
+        self.assertEqual(config['dns']['nameserver'], ['system'])
+        self.assertEqual(config['proxies'][0]['private-key'], client['private'])
+        self.assertEqual(config['proxies'][0]['persistent-keepalive'], 25)
+        self.assertEqual(config['rule-providers']['selected-service']['type'], 'http')
+        self.assertEqual(config['rules'][-1], 'MATCH,DIRECT')
+        self.assertEqual(yaml.safe_load(yaml.safe_dump(config)), config)
+
     def test_rule_validation_ignores_shared_ip_rules_and_rejects_injection(self):
         rules = m.parse_rules('payload:\n - DOMAIN-SUFFIX,youtube.com\n - IP-CIDR,1.0.0.0/8\n')
         self.assertEqual(rules, ['DOMAIN-SUFFIX,youtube.com'])
@@ -173,6 +186,9 @@ class ManagerTests(unittest.TestCase):
                 document = yaml.safe_load(response.read())
                 self.assertEqual(response.headers['Cache-Control'], 'no-store')
                 self.assertEqual(document['proxies'][0]['private-key'], m.load('clients.json')['TV']['private'])
+            with urlopen(base + '/s/' + token + '/mihomo.yaml') as response:
+                document = yaml.safe_load(response.read())
+                self.assertFalse(document['proxies'][0]['remote-dns-resolve'])
             with urlopen(base + '/s/' + token + '/rules.yaml') as response:
                 self.assertIn('DOMAIN-SUFFIX,youtube.com', yaml.safe_load(response.read())['payload'])
             for path in ('/', '/settings.json', '/s/' + 'A' * 43 + '/config.yaml', '/s/' + token + '/../clients.json'):
@@ -184,6 +200,9 @@ class ManagerTests(unittest.TestCase):
             self.assertNotIn('[Peer]', self.conf.read_text())
             with self.assertRaises(HTTPError) as error:
                 urlopen(base + '/s/' + token + '/config.yaml')
+            self.assertEqual(error.exception.code, 404)
+            with self.assertRaises(HTTPError) as error:
+                urlopen(base + '/s/' + token + '/mihomo.yaml')
             self.assertEqual(error.exception.code, 404)
         finally:
             server.shutdown()

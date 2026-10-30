@@ -239,6 +239,9 @@ def show_url(name):
     print('Stash subscription URL (private):\n' + url)
     print('\nOne-tap import link:\nstash://install-config?url=' + quote(url, safe=''))
     print('\nIn Stash: Configuration > Download from URL. Choose Rule mode.')
+    print('\nOptional Clash/Mihomo TEST profile (not for Stash):\n' +
+          subscription_base(settings, clients[name]) + '/mihomo.yaml')
+    print('Disconnect Stash before testing Clash with this same client.')
     print('TEST RELEASE: verify device DNS and YouTube playback before relying on it.')
 
 
@@ -281,6 +284,21 @@ def make_config(settings, client):
                   'RULE-SET,selected-service,This VPS', 'MATCH,DIRECT']}
 
 
+def make_mihomo_config(settings, client):
+    """Optional client trial: preserve local DNS, disable WG remote lookups."""
+    config = make_config(settings, client)
+    config['dns'] = {'enable': True, 'nameserver': ['system'],
+                     'default-nameserver': ['system'], 'respect-rules': False,
+                     'enhanced-mode': 'fake-ip', 'fake-ip-range': '198.18.0.1/16'}
+    proxy = config['proxies'][0]
+    proxy.pop('keepalive', None)
+    proxy.update({'persistent-keepalive': 25, 'remote-dns-resolve': False,
+                  'udp': True, 'allowed-ips': ['0.0.0.0/0']})
+    config['rule-providers']['selected-service'].update({
+        'type': 'http', 'path': './rule-providers/selected-service.yaml'})
+    return config
+
+
 class Gateway(BaseHTTPRequestHandler):
     server_version = 'StashSubscription'
 
@@ -297,7 +315,7 @@ class Gateway(BaseHTTPRequestHandler):
             path = urlsplit(self.path).path
             if path == '/health':
                 return self.respond(200, 'ok\n', 'text/plain')
-            match = re.fullmatch(r'/s/([A-Za-z0-9_-]{43})/(config|rules)\.yaml', path)
+            match = re.fullmatch(r'/s/([A-Za-z0-9_-]{43})/(config|rules|mihomo)\.yaml', path)
             if not match:
                 return self.respond(404, 'Not found\n', 'text/plain')
             token, kind = match.groups()
@@ -305,8 +323,11 @@ class Gateway(BaseHTTPRequestHandler):
                            if hmac.compare_digest(c['token'], token)), None)
             if client is None:
                 return self.respond(404, 'Not found\n', 'text/plain')
-            document = (make_config(load('settings.json'), client) if kind == 'config'
-                        else {'payload': current_rules()})
+            if kind == 'rules':
+                document = {'payload': current_rules()}
+            else:
+                renderer = make_mihomo_config if kind == 'mihomo' else make_config
+                document = renderer(load('settings.json'), client)
             self.respond(200, yaml.safe_dump(document, sort_keys=False), 'application/yaml')
         except Exception:
             self.respond(503, 'Configuration temporarily unavailable\n', 'text/plain')
